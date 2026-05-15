@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Colibri API
 
 API REST con **Node.js**, **Express** y **PostgreSQL (Supabase)** para gestión de vocabulario, usuarios y estadísticas.
@@ -205,3 +206,6 @@ Detalles de credenciales, SSL y `DATABASE_URL`: [docs/SUPABASE.md](./docs/SUPABA
 ## Licencia
 
 MIT
+=======
+# api-lingo
+>>>>>>> 3d0b4731364ce7c8d7c8d29f9edb789891197597
