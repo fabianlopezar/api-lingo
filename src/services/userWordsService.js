@@ -27,43 +27,30 @@ async function upsertTodayStats(userId) {
 async function markAsLearned(userId, wordId) {
   const validWordId = validateUuid(wordId, 'word_id');
 
-  const wordExists = await query('SELECT id FROM words WHERE id = $1', [validWordId]);
-  if (wordExists.rows.length === 0) {
-    throw new AppError('La palabra no existe', 404);
-  }
-
   const existing = await query(
     `SELECT id, status FROM user_words WHERE user_id = $1 AND word_id = $2`,
     [userId, validWordId]
   );
 
-  if (existing.rows.length > 0 && existing.rows[0].status === 'learned') {
+  if (existing.rows.length === 0) {
+    throw new AppError('La palabra no está en tu mazo', 404);
+  }
+
+  if (existing.rows[0].status === 'learned') {
     throw new AppError('Esta palabra ya está marcada como aprendida', 409);
   }
 
-  let record;
+  const updated = await query(
+    `UPDATE user_words
+     SET status = 'learned', learned_at = NOW(), times_correct = times_correct + 1
+     WHERE id = $1
+     RETURNING id, user_id, word_id, status, learned_at, times_seen, times_correct`,
+    [existing.rows[0].id]
+  );
 
-  if (existing.rows.length > 0) {
-    const updated = await query(
-      `UPDATE user_words
-       SET status = 'learned', learned_at = NOW(), times_correct = times_correct + 1
-       WHERE id = $1
-       RETURNING id, user_id, word_id, status, learned_at, times_seen, times_correct`,
-      [existing.rows[0].id]
-    );
-    record = updated.rows[0];
-  } else {
-    const inserted = await query(
-      `INSERT INTO user_words (user_id, word_id, status, learned_at, times_seen, times_correct)
-       VALUES ($1, $2, 'learned', NOW(), 1, 1)
-       RETURNING id, user_id, word_id, status, learned_at, times_seen, times_correct`,
-      [userId, validWordId]
-    );
-    record = inserted.rows[0];
-    await upsertTodayStats(userId);
-  }
+  await upsertTodayStats(userId);
 
-  return record;
+  return updated.rows[0];
 }
 
 async function getLearnedWords(userId, { limit = 50, offset = 0 } = {}) {

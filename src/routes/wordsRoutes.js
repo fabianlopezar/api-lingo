@@ -4,10 +4,8 @@ const authMiddleware = require('../middleware/auth');
 
 const router = express.Router();
 
-// Público: listar palabras
-router.get('/',authMiddleware, wordsController.getWords);
-
-// Requiere autenticación: crear palabra y obtener aleatoria (excluye aprendidas)
+// Requiere autenticación: solo palabras del usuario autenticado
+router.get('/', authMiddleware, wordsController.getWords);
 router.get('/random', authMiddleware, wordsController.getRandomWord);
 router.post('/', authMiddleware, wordsController.createWord);
 router.patch('/:id', authMiddleware, wordsController.updateWord);

@@ -16,22 +16,24 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- WORDS
+-- WORDS (vocabulario global)
 CREATE TABLE IF NOT EXISTS words (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  word VARCHAR(255) NOT NULL,
-  translation VARCHAR(255) NOT NULL,
-  definition TEXT,
-  language VARCHAR(10) DEFAULT 'es',
+  english_word VARCHAR(255) NOT NULL,
+  spanish_word VARCHAR(255) NOT NULL,
+  pronunciation TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- USER_WORDS (palabras aprendidas por usuario)
+-- USER_WORDS (relación usuario ↔ palabra: learning | learned)
 CREATE TABLE IF NOT EXISTS user_words (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   word_id UUID NOT NULL REFERENCES words(id) ON DELETE CASCADE,
-  learned_at TIMESTAMPTZ DEFAULT NOW(),
+  status VARCHAR(20) NOT NULL DEFAULT 'learning',
+  learned_at TIMESTAMPTZ,
+  times_seen INTEGER DEFAULT 0,
+  times_correct INTEGER DEFAULT 0,
   UNIQUE(user_id, word_id)
 );
 
@@ -48,11 +50,4 @@ CREATE TABLE IF NOT EXISTS stats (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Datos de ejemplo (opcional)
-INSERT INTO words (word, translation, definition, language) VALUES
-  ('hello', 'hola', 'Saludo en inglés', 'en'),
-  ('world', 'mundo', 'El planeta o un ámbito', 'en'),
-  ('learn', 'aprender', 'Adquirir conocimiento', 'en'),
-  ('bird', 'pájaro', 'Animal volador', 'en'),
-  ('fly', 'volar', 'Moverse por el aire', 'en')
-ON CONFLICT DO NOTHING;
+-- Las palabras de ejemplo deben crearse con user_id vía la API (POST /api/words)
