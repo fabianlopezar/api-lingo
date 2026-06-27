@@ -2,7 +2,7 @@
 function formatWord(row) {
   if (!row) return null;
 
-  return {
+  const word = {
     id: row.id,
     word: row.english_word,
     translation: row.spanish_word,
@@ -10,6 +10,31 @@ function formatWord(row) {
     spanishWord: row.spanish_word,
     pronunciation: row.pronunciation,
     createdAt: row.created_at,
+    categoryId: row.category_id ?? null,
+  };
+
+  if (row.category_id && row.nombre_categoria) {
+    word.category = {
+      id: row.category_id,
+      name: row.nombre_categoria,
+      rating: row.calificacion_categoria ?? 0,
+    };
+  }
+
+  return word;
+}
+
+function formatCategory(row) {
+  if (!row) return null;
+
+  return {
+    id: row.id,
+    name: row.nombre_categoria,
+    nombreCategoria: row.nombre_categoria,
+    rating: row.calificacion_categoria ?? 0,
+    calificacionCategoria: row.calificacion_categoria ?? 0,
+    createdAt: row.created_at,
+    wordCount: row.word_count ?? row.wordCount ?? 0,
   };
 }
 
@@ -22,4 +47,4 @@ function formatUser(user) {
   };
 }
 
-module.exports = { formatWord, formatUser };
+module.exports = { formatWord, formatUser, formatCategory };

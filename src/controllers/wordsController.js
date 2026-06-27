@@ -18,7 +18,17 @@ const getWords = asyncHandler(async (req, res) => {
 });
 
 const createWord = asyncHandler(async (req, res) => {
-  const { word, translation, definition, language, pronunciation, english_word, spanish_word } = req.body;
+  const {
+    word,
+    translation,
+    definition,
+    language,
+    pronunciation,
+    english_word,
+    spanish_word,
+    category_id,
+    categoryId,
+  } = req.body;
   const newWord = await wordsService.createWord(req.user.id, {
     word,
     translation,
@@ -27,6 +37,8 @@ const createWord = asyncHandler(async (req, res) => {
     pronunciation,
     english_word,
     spanish_word,
+    category_id,
+    categoryId,
   });
 
   res.status(201).json({
@@ -37,7 +49,16 @@ const createWord = asyncHandler(async (req, res) => {
 });
 
 const updateWord = asyncHandler(async (req, res) => {
-  const { word, translation, definition, pronunciation, english_word, spanish_word } = req.body;
+  const {
+    word,
+    translation,
+    definition,
+    pronunciation,
+    english_word,
+    spanish_word,
+    category_id,
+    categoryId,
+  } = req.body;
   const updated = await wordsService.updateWord(req.user.id, req.params.id, {
     word,
     translation,
@@ -45,6 +66,8 @@ const updateWord = asyncHandler(async (req, res) => {
     pronunciation,
     english_word,
     spanish_word,
+    category_id,
+    categoryId,
   });
 
   res.json({

@@ -64,9 +64,13 @@ async function getLearnedWords(userId, { limit = 50, offset = 0 } = {}) {
        w.id AS word_id,
        w.english_word,
        w.spanish_word,
-       w.pronunciation
+       w.pronunciation,
+       w.category_id,
+       c.nombre_categoria,
+       c.calificacion_categoria
      FROM user_words uw
      INNER JOIN words w ON w.id = uw.word_id
+     LEFT JOIN categories c ON c.id = w.category_id
      WHERE uw.user_id = $1 AND uw.status = 'learned'
      ORDER BY uw.learned_at DESC
      LIMIT $2 OFFSET $3`,
@@ -87,6 +91,9 @@ async function getLearnedWords(userId, { limit = 50, offset = 0 } = {}) {
         english_word: row.english_word,
         spanish_word: row.spanish_word,
         pronunciation: row.pronunciation,
+        category_id: row.category_id,
+        nombre_categoria: row.nombre_categoria,
+        calificacion_categoria: row.calificacion_categoria,
       }),
     })),
     total: countResult.rows[0].total,

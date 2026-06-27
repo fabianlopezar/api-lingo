@@ -16,14 +16,28 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- CATEGORIES (por usuario)
+CREATE TABLE IF NOT EXISTS categories (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  nombre_categoria VARCHAR(255) NOT NULL,
+  calificacion_categoria INTEGER DEFAULT 0,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_categories_user_id ON categories(user_id);
+
 -- WORDS (vocabulario global)
 CREATE TABLE IF NOT EXISTS words (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   english_word VARCHAR(255) NOT NULL,
   spanish_word VARCHAR(255) NOT NULL,
   pronunciation TEXT,
+  category_id UUID REFERENCES categories(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE INDEX IF NOT EXISTS idx_words_category_id ON words(category_id);
 
 -- USER_WORDS (relación usuario ↔ palabra: learning | learned)
 CREATE TABLE IF NOT EXISTS user_words (

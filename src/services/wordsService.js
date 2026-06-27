@@ -2,17 +2,24 @@ const { query, getPool } = require('../config/db');
 const AppError = require('../utils/AppError');
 const { formatWord } = require('../utils/mappers');
 const { validateRequiredString, validateUuid } = require('../utils/validators');
+const { resolveCategoryId } = require('./categoriesService');
 
 const USER_WORDS_JOIN = `
   FROM user_words uw
   INNER JOIN words w ON w.id = uw.word_id
+  LEFT JOIN categories c ON c.id = w.category_id
+`;
+
+const WORD_SELECT = `
+  w.id, w.english_word, w.spanish_word, w.pronunciation, w.created_at,
+  w.category_id, c.nombre_categoria, c.calificacion_categoria, uw.status
 `;
 
 async function getAllWords({ userId, limit = 50, offset = 0 } = {}) {
   const validUserId = validateUuid(userId, 'user id');
 
   const result = await query(
-    `SELECT w.id, w.english_word, w.spanish_word, w.pronunciation, w.created_at, uw.status
+    `SELECT ${WORD_SELECT}
      ${USER_WORDS_JOIN}
      WHERE uw.user_id = $1
      ORDER BY w.created_at DESC
@@ -49,7 +56,10 @@ async function assertUserOwnsWord(userId, wordId) {
   return validWordId;
 }
 
-async function createWord(userId, { word, translation, english_word, spanish_word, pronunciation, definition }) {
+async function createWord(
+  userId,
+  { word, translation, english_word, spanish_word, pronunciation, definition, category_id, categoryId }
+) {
   const validUserId = validateUuid(userId, 'user id');
   const englishWord = validateRequiredString(english_word || word, 'word / english_word');
   const spanishWord = validateRequiredString(spanish_word || translation, 'translation / spanish_word');
@@ -57,6 +67,7 @@ async function createWord(userId, { word, translation, english_word, spanish_wor
     pronunciation !== undefined
       ? pronunciation?.trim() || null
       : definition?.trim() || null;
+  const resolvedCategoryId = await resolveCategoryId(validUserId, category_id ?? categoryId ?? null);
 
   const pool = await getPool();
   const client = await pool.connect();
@@ -65,10 +76,10 @@ async function createWord(userId, { word, translation, english_word, spanish_wor
     await client.query('BEGIN');
 
     const wordResult = await client.query(
-      `INSERT INTO words (english_word, spanish_word, pronunciation)
-       VALUES ($1, $2, $3)
-       RETURNING id, english_word, spanish_word, pronunciation, created_at`,
-      [englishWord, spanishWord, pron]
+      `INSERT INTO words (english_word, spanish_word, pronunciation, category_id)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, english_word, spanish_word, pronunciation, category_id, created_at`,
+      [englishWord, spanishWord, pron, resolvedCategoryId]
     );
 
     const newWord = wordResult.rows[0];
@@ -80,6 +91,18 @@ async function createWord(userId, { word, translation, english_word, spanish_wor
     );
 
     await client.query('COMMIT');
+
+    if (resolvedCategoryId) {
+      const cat = await query(
+        'SELECT nombre_categoria, calificacion_categoria FROM categories WHERE id = $1',
+        [resolvedCategoryId]
+      );
+      if (cat.rows[0]) {
+        newWord.nombre_categoria = cat.rows[0].nombre_categoria;
+        newWord.calificacion_categoria = cat.rows[0].calificacion_categoria;
+      }
+    }
+
     return formatWord(newWord);
   } catch (error) {
     await client.query('ROLLBACK');
@@ -92,7 +115,11 @@ async function createWord(userId, { word, translation, english_word, spanish_wor
   }
 }
 
-async function updateWord(userId, id, { word, translation, english_word, spanish_word, pronunciation, definition }) {
+async function updateWord(
+  userId,
+  id,
+  { word, translation, english_word, spanish_word, pronunciation, definition, category_id, categoryId }
+) {
   const wordId = await assertUserOwnsWord(userId, id);
 
   const englishWord = validateRequiredString(english_word || word, 'english_word / word');
@@ -104,33 +131,66 @@ async function updateWord(userId, id, { word, translation, english_word, spanish
         ? definition?.trim() || null
         : undefined;
 
+  const hasCategoryUpdate = category_id !== undefined || categoryId !== undefined;
+  const resolvedCategoryId = hasCategoryUpdate
+    ? await resolveCategoryId(userId, category_id ?? categoryId ?? null)
+    : undefined;
+
   let result;
-  if (pron !== undefined) {
+  if (pron !== undefined && hasCategoryUpdate) {
+    result = await query(
+      `UPDATE words
+       SET english_word = $1, spanish_word = $2, pronunciation = $3, category_id = $4
+       WHERE id = $5
+       RETURNING id, english_word, spanish_word, pronunciation, category_id, created_at`,
+      [englishWord, spanishWord, pron, resolvedCategoryId, wordId]
+    );
+  } else if (pron !== undefined) {
     result = await query(
       `UPDATE words
        SET english_word = $1, spanish_word = $2, pronunciation = $3
        WHERE id = $4
-       RETURNING id, english_word, spanish_word, pronunciation, created_at`,
+       RETURNING id, english_word, spanish_word, pronunciation, category_id, created_at`,
       [englishWord, spanishWord, pron, wordId]
+    );
+  } else if (hasCategoryUpdate) {
+    result = await query(
+      `UPDATE words
+       SET english_word = $1, spanish_word = $2, category_id = $3
+       WHERE id = $4
+       RETURNING id, english_word, spanish_word, pronunciation, category_id, created_at`,
+      [englishWord, spanishWord, resolvedCategoryId, wordId]
     );
   } else {
     result = await query(
       `UPDATE words
        SET english_word = $1, spanish_word = $2
        WHERE id = $3
-       RETURNING id, english_word, spanish_word, pronunciation, created_at`,
+       RETURNING id, english_word, spanish_word, pronunciation, category_id, created_at`,
       [englishWord, spanishWord, wordId]
     );
   }
 
-  return formatWord(result.rows[0]);
+  const row = result.rows[0];
+  if (row.category_id) {
+    const cat = await query(
+      'SELECT nombre_categoria, calificacion_categoria FROM categories WHERE id = $1',
+      [row.category_id]
+    );
+    if (cat.rows[0]) {
+      row.nombre_categoria = cat.rows[0].nombre_categoria;
+      row.calificacion_categoria = cat.rows[0].calificacion_categoria;
+    }
+  }
+
+  return formatWord(row);
 }
 
 async function getRandomWord(userId) {
   const validUserId = validateUuid(userId, 'user id');
 
   const result = await query(
-    `SELECT w.id, w.english_word, w.spanish_word, w.pronunciation, w.created_at
+    `SELECT ${WORD_SELECT}
      ${USER_WORDS_JOIN}
      WHERE uw.user_id = $1
        AND uw.status = 'learning'

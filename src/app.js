@@ -6,6 +6,7 @@ const authRoutes = require('./routes/authRoutes');
 const wordsRoutes = require('./routes/wordsRoutes');
 const userWordsRoutes = require('./routes/userWordsRoutes');
 const statsRoutes = require('./routes/statsRoutes');
+const categoriesRoutes = require('./routes/categoriesRoutes');
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
 
 const app = express();
@@ -35,6 +36,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/words', wordsRoutes);
 app.use('/api/user-words', userWordsRoutes);
 app.use('/api/stats', statsRoutes);
+app.use('/api/categories', categoriesRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
