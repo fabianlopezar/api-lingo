@@ -3,6 +3,7 @@ const AppError = require('../utils/AppError');
 const { formatWord } = require('../utils/mappers');
 const { validateRequiredString, validateUuid } = require('../utils/validators');
 const { resolveCategoryId } = require('./categoriesService');
+const { handleUnknownWord } = require('./unknownWordService');
 
 const USER_WORDS_JOIN = `
   FROM user_words uw
@@ -75,14 +76,30 @@ async function createWord(
   try {
     await client.query('BEGIN');
 
-    const wordResult = await client.query(
-      `INSERT INTO words (english_word, spanish_word, pronunciation, category_id)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, english_word, spanish_word, pronunciation, category_id, created_at`,
-      [englishWord, spanishWord, pron, resolvedCategoryId]
+    // Restricción: solo crea la palabra si `word` (english_word) no existe.
+    // Si ya existe, reutiliza esa fila global (se ignora la traducción
+    // entrante) y solo crea el enlace en `user_words`.
+    const existing = await client.query(
+      `SELECT id, english_word, spanish_word, pronunciation, category_id, created_at
+       FROM words
+       WHERE LOWER(english_word) = LOWER($1)
+       ORDER BY created_at ASC, id ASC
+       LIMIT 1`,
+      [englishWord]
     );
 
-    const newWord = wordResult.rows[0];
+    let newWord;
+    if (existing.rows.length > 0) {
+      newWord = existing.rows[0];
+    } else {
+      const wordResult = await client.query(
+        `INSERT INTO words (english_word, spanish_word, pronunciation, category_id)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, english_word, spanish_word, pronunciation, category_id, created_at`,
+        [englishWord, spanishWord, pron, resolvedCategoryId]
+      );
+      newWord = wordResult.rows[0];
+    }
 
     await client.query(
       `INSERT INTO user_words (user_id, word_id, status, times_seen, times_correct)
@@ -92,10 +109,12 @@ async function createWord(
 
     await client.query('COMMIT');
 
-    if (resolvedCategoryId) {
+    // La categoría mostrada es la almacenada en la fila (al reutilizar una
+    // palabra global no se toca su category_id: es compartida con otros mazos).
+    if (newWord.category_id) {
       const cat = await query(
         'SELECT nombre_categoria, calificacion_categoria FROM categories WHERE id = $1',
-        [resolvedCategoryId]
+        [newWord.category_id]
       );
       if (cat.rows[0]) {
         newWord.nombre_categoria = cat.rows[0].nombre_categoria;
@@ -206,10 +225,140 @@ async function getRandomWord(userId) {
   return formatWord(result.rows[0]);
 }
 
+/** pg / network codes that mean "DB unreachable" (→ 503, not 500). */
+const CONNECTION_ERROR_CODES = new Set([
+  'ECONNREFUSED',
+  'ENOTFOUND',
+  'ETIMEDOUT',
+  'EHOSTUNREACH',
+  'EPIPE',
+  'ECONNRESET',
+  '57P01', // admin shutdown
+  '57P02', // crash shutdown
+  '53300', // too_many_connections
+]);
+
+function isConnectionError(error) {
+  return (
+    CONNECTION_ERROR_CODES.has(error?.code) ||
+    /timeout|expir|connect/i.test(error?.message || '')
+  );
+}
+
+/**
+ * Task 1 — Word lookup microservice function.
+ *
+ * 1. Exact-matches `term` against `words.english_word` OR `words.spanish_word`
+ *    (parameterized — no string interpolation, SQL-injection safe).
+ * 2. On HIT: inserts the `word_id` into the requester's `user_words`
+ *    learning list (idempotent via ON CONFLICT DO NOTHING) and returns
+ *    `{ found: true, added, wordId, word }`.
+ * 3. On MISS: saves nothing, delegates to Task 2 (`options.onNotFound`,
+ *    defaults to `handleUnknownWord`) and returns a
+ *    `{ found: false, term, delegatedTo: 'Task2' }` signal. Word
+ *    creation/insertion is Task 2's job — never done here.
+ *
+ * @param {string} userId  Authenticated user id (from `req.user.id`).
+ * @param {string} rawTerm Lookup term from the request body.
+ * @param {object} [options]
+ * @param {Function} [options.onNotFound=handleUnknownWord] Task 2 hook:
+ *   `async (userId, term) => handoff`. May throw AppError(404) instead —
+ *   the throw propagates as the not-found signal.
+ */
+async function lookupAndSaveWord(userId, rawTerm, options = {}) {
+  const validUserId = validateUuid(userId, 'user id');
+  const term = validateRequiredString(rawTerm, 'word');
+  const { onNotFound = handleUnknownWord } = options;
+
+  let match;
+  try {
+    match = await query(
+      `SELECT
+         w.id, w.english_word, w.spanish_word, w.pronunciation,
+         w.category_id, w.created_at,
+         c.nombre_categoria, c.calificacion_categoria
+       FROM words w
+       LEFT JOIN categories c ON c.id = w.category_id
+       WHERE w.english_word = $1 OR w.spanish_word = $1
+       LIMIT 1`,
+      [term]
+    );
+  } catch (error) {
+    console.error('[lookupWord] Query failed:', {
+      userId: validUserId,
+      term,
+      code: error?.code,
+      message: error?.message,
+    });
+    if (error instanceof AppError) throw error;
+    if (isConnectionError(error)) {
+      throw new AppError('Base de datos no disponible. Inténtalo de nuevo más tarde.', 503);
+    }
+    throw error;
+  }
+
+  if (match.rows.length === 0) {
+    console.log('[lookupWord] Miss — delegating to Task 2:', {
+      userId: validUserId,
+      term,
+    });
+
+    let task2 = { delegated: true, delegatedTo: 'Task2' };
+    if (typeof onNotFound === 'function') {
+      const handoff = await onNotFound(validUserId, term);
+      if (handoff !== undefined) task2 = handoff;
+    }
+
+    return { found: false, term, delegatedTo: 'Task2', task2 };
+  }
+
+  const row = match.rows[0];
+
+  try {
+    const insert = await query(
+      `INSERT INTO user_words (user_id, word_id, status, times_seen, times_correct)
+       VALUES ($1, $2, 'learning', 0, 0)
+       ON CONFLICT (user_id, word_id) DO NOTHING
+       RETURNING id`,
+      [validUserId, row.id]
+    );
+    const added = insert.rows.length > 0;
+
+    console.log('[lookupWord] Hit:', {
+      userId: validUserId,
+      term,
+      wordId: row.id,
+      added,
+    });
+
+    return {
+      found: true,
+      added,
+      alreadyInList: !added,
+      wordId: row.id,
+      word: formatWord({ ...row, status: 'learning' }),
+    };
+  } catch (error) {
+    console.error('[lookupWord] Save to learning list failed:', {
+      userId: validUserId,
+      term,
+      wordId: row.id,
+      code: error?.code,
+      message: error?.message,
+    });
+    if (error instanceof AppError) throw error;
+    if (isConnectionError(error)) {
+      throw new AppError('Base de datos no disponible. Inténtalo de nuevo más tarde.', 503);
+    }
+    throw error;
+  }
+}
+
 module.exports = {
   getAllWords,
   createWord,
   updateWord,
   getRandomWord,
+  lookupAndSaveWord,
   assertUserOwnsWord,
 };

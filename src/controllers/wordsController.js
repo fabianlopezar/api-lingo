@@ -86,9 +86,34 @@ const getRandomWord = asyncHandler(async (req, res) => {
   });
 });
 
+const lookupWord = asyncHandler(async (req, res) => {
+  const { word, term, query: queryTerm, english_word, spanish_word } = req.body || {};
+  const result = await wordsService.lookupAndSaveWord(
+    req.user.id,
+    word ?? term ?? queryTerm ?? english_word ?? spanish_word
+  );
+
+  if (!result.found) {
+    return res.status(404).json({
+      success: false,
+      message: `La palabra "${result.term}" no existe en la base de datos. Se delega a Task 2 para su creación.`,
+      data: result,
+    });
+  }
+
+  res.status(result.added ? 201 : 200).json({
+    success: true,
+    message: result.added
+      ? 'Palabra encontrada y añadida a tu lista de aprendizaje'
+      : 'La palabra ya estaba en tu lista de aprendizaje',
+    data: result,
+  });
+});
+
 module.exports = {
   getWords,
   createWord,
   updateWord,
   getRandomWord,
+  lookupWord,
 };

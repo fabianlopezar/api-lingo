@@ -7,6 +7,7 @@ const router = express.Router();
 // Requiere autenticación: solo palabras del usuario autenticado
 router.get('/', authMiddleware, wordsController.getWords);
 router.get('/random', authMiddleware, wordsController.getRandomWord);
+router.post('/lookup', authMiddleware, wordsController.lookupWord);
 router.post('/', authMiddleware, wordsController.createWord);
 router.patch('/:id', authMiddleware, wordsController.updateWord);
 
