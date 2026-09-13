@@ -9,4 +9,9 @@ router.use(authMiddleware);
 router.post('/learned', userWordsController.markLearned);
 router.get('/learned', userWordsController.getLearned);
 
+// Sistema Leitner (repetición espaciada). Antes de `/:id` para no colisionar.
+router.get('/review/due', userWordsController.getDueReviews);
+router.get('/review/stats', userWordsController.getReviewStats);
+router.post('/review', userWordsController.evaluateReview);
+
 module.exports = router;

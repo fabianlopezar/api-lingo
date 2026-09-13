@@ -1,6 +1,6 @@
 const { query } = require('../config/db');
 const AppError = require('../utils/AppError');
-const { formatWord } = require('../utils/mappers');
+const { formatWord, attachIllustrations, attachLinguisticDetails } = require('../utils/mappers');
 const { validateUuid } = require('../utils/validators');
 
 async function upsertTodayStats(userId) {
@@ -83,19 +83,23 @@ async function getLearnedWords(userId, { limit = 50, offset = 0 } = {}) {
     [userId]
   );
 
+  const learnedWords = result.rows.map((row) => ({
+    ...row,
+    word: formatWord({
+      id: row.word_id,
+      english_word: row.english_word,
+      spanish_word: row.spanish_word,
+      pronunciation: row.pronunciation,
+      category_id: row.category_id,
+      nombre_categoria: row.nombre_categoria,
+      calificacion_categoria: row.calificacion_categoria,
+    }),
+  }));
+  await attachIllustrations(learnedWords.map((entry) => entry.word));
+  await attachLinguisticDetails(learnedWords.map((entry) => entry.word));
+
   return {
-    learnedWords: result.rows.map((row) => ({
-      ...row,
-      word: formatWord({
-        id: row.word_id,
-        english_word: row.english_word,
-        spanish_word: row.spanish_word,
-        pronunciation: row.pronunciation,
-        category_id: row.category_id,
-        nombre_categoria: row.nombre_categoria,
-        calificacion_categoria: row.calificacion_categoria,
-      }),
-    })),
+    learnedWords,
     total: countResult.rows[0].total,
     limit,
     offset,

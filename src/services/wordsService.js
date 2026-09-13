@@ -1,9 +1,11 @@
 const { query, getPool } = require('../config/db');
 const AppError = require('../utils/AppError');
-const { formatWord } = require('../utils/mappers');
+const { formatWord, attachIllustrations, attachLinguisticDetails } = require('../utils/mappers');
 const { validateRequiredString, validateUuid } = require('../utils/validators');
 const { resolveCategoryId } = require('./categoriesService');
+const { leitnerReady } = require('../utils/leitnerSupport');
 const { handleUnknownWord } = require('./unknownWordService');
+const { isConnectionError } = require('../utils/dbErrors');
 
 const USER_WORDS_JOIN = `
   FROM user_words uw
@@ -11,16 +13,28 @@ const USER_WORDS_JOIN = `
   LEFT JOIN categories c ON c.id = w.category_id
 `;
 
-const WORD_SELECT = `
+const WORD_SELECT_BASE = `
   w.id, w.english_word, w.spanish_word, w.pronunciation, w.created_at,
   w.category_id, c.nombre_categoria, c.calificacion_categoria, uw.status
 `;
+
+// Columnas Leitner (migración 004). Solo se incluyen si la migración ya
+// fue aplicada en Supabase; si no, el SELECT degrada sin romper.
+const WORD_SELECT_LEITNER = `
+  , uw.current_box, uw.last_reviewed_at, uw.next_review_at,
+  uw.times_seen, uw.times_correct
+`;
+
+async function wordSelect() {
+  if (await leitnerReady()) return WORD_SELECT_BASE + WORD_SELECT_LEITNER;
+  return WORD_SELECT_BASE;
+}
 
 async function getAllWords({ userId, limit = 50, offset = 0 } = {}) {
   const validUserId = validateUuid(userId, 'user id');
 
   const result = await query(
-    `SELECT ${WORD_SELECT}
+    `SELECT ${await wordSelect()}
      ${USER_WORDS_JOIN}
      WHERE uw.user_id = $1
      ORDER BY w.created_at DESC
@@ -33,8 +47,12 @@ async function getAllWords({ userId, limit = 50, offset = 0 } = {}) {
     [validUserId]
   );
 
+  const words = result.rows.map(formatWord);
+  await attachIllustrations(words);
+  await attachLinguisticDetails(words);
+
   return {
-    words: result.rows.map(formatWord),
+    words,
     total: countResult.rows[0].total,
     limit,
     offset,
@@ -101,11 +119,22 @@ async function createWord(
       newWord = wordResult.rows[0];
     }
 
-    await client.query(
-      `INSERT INTO user_words (user_id, word_id, status, times_seen, times_correct)
-       VALUES ($1, $2, 'learning', 0, 0)`,
-      [validUserId, newWord.id]
-    );
+    // Palabra nueva → Caja 1. Si la migración 004 aún no fue aplicada,
+    // se inserta sin columnas Leitner (degrada sin romper).
+    if (await leitnerReady()) {
+      await client.query(
+        `INSERT INTO user_words (user_id, word_id, status, times_seen, times_correct,
+                                current_box, last_reviewed_at, next_review_at)
+         VALUES ($1, $2, 'learning', 0, 0, 1, NOW(), NOW() + INTERVAL '1 day')`,
+        [validUserId, newWord.id]
+      );
+    } else {
+      await client.query(
+        `INSERT INTO user_words (user_id, word_id, status, times_seen, times_correct)
+         VALUES ($1, $2, 'learning', 0, 0)`,
+        [validUserId, newWord.id]
+      );
+    }
 
     await client.query('COMMIT');
 
@@ -122,7 +151,10 @@ async function createWord(
       }
     }
 
-    return formatWord(newWord);
+    const formatted = formatWord(newWord);
+    await attachIllustrations(formatted);
+    await attachLinguisticDetails(formatted);
+    return formatted;
   } catch (error) {
     await client.query('ROLLBACK');
     if (error.code === '23505') {
@@ -202,18 +234,28 @@ async function updateWord(
     }
   }
 
-  return formatWord(row);
+  const formatted = formatWord(row);
+  await attachIllustrations(formatted);
+  await attachLinguisticDetails(formatted);
+  return formatted;
 }
 
 async function getRandomWord(userId) {
   const validUserId = validateUuid(userId, 'user id');
 
+  // Leitner: las vencidas (next_review_at <= NOW()) salen primero,
+  // sorteadas al azar entre sí; si no hay vencidas, sorteo normal
+  // entre el resto. Sin la migración 004 se degrada al azar puro.
+  const orderBy = (await leitnerReady())
+    ? 'ORDER BY (uw.next_review_at <= NOW()) DESC, RANDOM()'
+    : 'ORDER BY RANDOM()';
+
   const result = await query(
-    `SELECT ${WORD_SELECT}
+    `SELECT ${await wordSelect()}
      ${USER_WORDS_JOIN}
      WHERE uw.user_id = $1
        AND uw.status = 'learning'
-     ORDER BY RANDOM()
+     ${orderBy}
      LIMIT 1`,
     [validUserId]
   );
@@ -222,27 +264,10 @@ async function getRandomWord(userId) {
     throw new AppError('No hay palabras nuevas disponibles. ¡Has aprendido todas!', 404);
   }
 
-  return formatWord(result.rows[0]);
-}
-
-/** pg / network codes that mean "DB unreachable" (→ 503, not 500). */
-const CONNECTION_ERROR_CODES = new Set([
-  'ECONNREFUSED',
-  'ENOTFOUND',
-  'ETIMEDOUT',
-  'EHOSTUNREACH',
-  'EPIPE',
-  'ECONNRESET',
-  '57P01', // admin shutdown
-  '57P02', // crash shutdown
-  '53300', // too_many_connections
-]);
-
-function isConnectionError(error) {
-  return (
-    CONNECTION_ERROR_CODES.has(error?.code) ||
-    /timeout|expir|connect/i.test(error?.message || '')
-  );
+  const word = formatWord(result.rows[0]);
+  await attachIllustrations(word);
+  await attachLinguisticDetails(word);
+  return word;
 }
 
 /**
@@ -262,8 +287,10 @@ function isConnectionError(error) {
  * @param {string} rawTerm Lookup term from the request body.
  * @param {object} [options]
  * @param {Function} [options.onNotFound=handleUnknownWord] Task 2 hook:
- *   `async (userId, term) => handoff`. May throw AppError(404) instead —
- *   the throw propagates as the not-found signal.
+ *   `async (userId, term) => result`. Si Task 2 crea la palabra, su
+ *   resultado (`{ created: true, ... }`) se propaga tal cual; si devuelve
+ *   un handoff informativo se envuelve en la señal `{ found: false, ... }`.
+ *   También puede lanzar AppError(404) — el throw propaga la señal.
  */
 async function lookupAndSaveWord(userId, rawTerm, options = {}) {
   const validUserId = validateUuid(userId, 'user id');
@@ -306,6 +333,8 @@ async function lookupAndSaveWord(userId, rawTerm, options = {}) {
     let task2 = { delegated: true, delegatedTo: 'Task2' };
     if (typeof onNotFound === 'function') {
       const handoff = await onNotFound(validUserId, term);
+      // Task 2 resolvió el miss (creó o encontró la palabra): propagar.
+      if (handoff && (handoff.created || handoff.found)) return handoff;
       if (handoff !== undefined) task2 = handoff;
     }
 
@@ -315,11 +344,18 @@ async function lookupAndSaveWord(userId, rawTerm, options = {}) {
   const row = match.rows[0];
 
   try {
+    const leitner = await leitnerReady();
     const insert = await query(
-      `INSERT INTO user_words (user_id, word_id, status, times_seen, times_correct)
-       VALUES ($1, $2, 'learning', 0, 0)
-       ON CONFLICT (user_id, word_id) DO NOTHING
-       RETURNING id`,
+      leitner
+        ? `INSERT INTO user_words (user_id, word_id, status, times_seen, times_correct,
+                                  current_box, last_reviewed_at, next_review_at)
+           VALUES ($1, $2, 'learning', 0, 0, 1, NOW(), NOW() + INTERVAL '1 day')
+           ON CONFLICT (user_id, word_id) DO NOTHING
+           RETURNING id`
+        : `INSERT INTO user_words (user_id, word_id, status, times_seen, times_correct)
+           VALUES ($1, $2, 'learning', 0, 0)
+           ON CONFLICT (user_id, word_id) DO NOTHING
+           RETURNING id`,
       [validUserId, row.id]
     );
     const added = insert.rows.length > 0;
@@ -331,12 +367,16 @@ async function lookupAndSaveWord(userId, rawTerm, options = {}) {
       added,
     });
 
+    const word = formatWord({ ...row, status: 'learning' });
+    await attachIllustrations(word);
+    await attachLinguisticDetails(word);
+
     return {
       found: true,
       added,
       alreadyInList: !added,
       wordId: row.id,
-      word: formatWord({ ...row, status: 'learning' }),
+      word,
     };
   } catch (error) {
     console.error('[lookupWord] Save to learning list failed:', {
@@ -354,11 +394,74 @@ async function lookupAndSaveWord(userId, rawTerm, options = {}) {
   }
 }
 
+/**
+ * Detalle de una palabra del mazo con sus relaciones para la tarjeta:
+ * grammar_family (+ grammar_category), synonyms, antonyms,
+ * collocations, example + traducción e ilustraciones.
+ * 404 si la palabra no está en el mazo del usuario.
+ */
+async function getWordById(userId, wordId) {
+  const validWordId = await assertUserOwnsWord(userId, wordId);
+
+  const result = await query(
+    `SELECT ${await wordSelect()}
+     ${USER_WORDS_JOIN}
+     WHERE uw.user_id = $1 AND w.id = $2
+     LIMIT 1`,
+    [userId, validWordId]
+  );
+
+  if (result.rows.length === 0) {
+    throw new AppError('La palabra no existe en tu mazo', 404);
+  }
+
+  const word = formatWord(result.rows[0]);
+  await attachIllustrations(word);
+  await attachLinguisticDetails(word);
+  return word;
+}
+
+/**
+ * Autocompletado para el formulario de Agregar: busca en `words` por
+ * prefijo en inglés (insensible a mayúsculas) y marca cuáles ya están
+ * en el mazo del usuario (`inDeck`). Solo lectura, limitado (def. 8).
+ *
+ * @param {string} userId UUID del usuario autenticado.
+ * @param {string} rawTerm Prefijo tecleado (mín. 1 carácter no vacío).
+ * @param {object} [options]
+ * @param {number} [options.limit=8] Máx. 20.
+ */
+async function searchWords(userId, rawTerm, { limit = 8 } = {}) {
+  const validUserId = validateUuid(userId, 'user id');
+  if (!rawTerm || typeof rawTerm !== 'string' || !rawTerm.trim()) {
+    return { suggestions: [] };
+  }
+  const term = rawTerm.trim().slice(0, 100);
+  const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 8, 1), 20);
+
+  const result = await query(
+    `SELECT w.id,
+            w.english_word AS english,
+            w.spanish_word AS spanish,
+            (uw.word_id IS NOT NULL) AS "inDeck"
+     FROM words w
+     LEFT JOIN user_words uw ON uw.word_id = w.id AND uw.user_id = $2
+     WHERE w.english_word ILIKE $1 || '%'
+     ORDER BY w.english_word ASC
+     LIMIT $3`,
+    [term, validUserId, safeLimit]
+  );
+
+  return { suggestions: result.rows };
+}
+
 module.exports = {
   getAllWords,
   createWord,
   updateWord,
   getRandomWord,
+  getWordById,
   lookupAndSaveWord,
+  searchWords,
   assertUserOwnsWord,
 };

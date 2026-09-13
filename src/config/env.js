@@ -146,11 +146,41 @@ const supabase = {
   projectRef,
 };
 
+const gemini = {
+  apiKey: process.env.GEMINI_API_KEY || null,
+  model: process.env.GEMINI_MODEL || 'gemini-flash-lite-latest',
+  imageModel: process.env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-image',
+};
+
+const illustration = {
+  // auto: Gemini → OpenRouter → Pollinations (gratis, sin key).
+  // Valores: auto | gemini | openrouter | pollinations
+  provider: (process.env.ILLUSTRATION_PROVIDER || 'auto').toLowerCase(),
+  pollinationsModel: process.env.POLLINATIONS_MODEL || 'flux',
+  pollinationsSize: parseInt(process.env.POLLINATIONS_SIZE, 10) || 1024,
+};
+
+const openrouter = {
+  apiKey: process.env.OPENROUTER_API_KEY || null,
+  // Modelo con salida de imagen (modalities image+text).
+  imageModel: process.env.OPENROUTER_IMAGE_MODEL || 'google/gemini-2.5-flash-image',
+};
+
+const cloudinary = {
+  cloudName: process.env.CLOUDINARY_CLOUD_NAME || null,
+  apiKey: process.env.CLOUDINARY_API_KEY || null,
+  apiSecret: process.env.CLOUDINARY_API_SECRET || null,
+};
+
 module.exports = {
   databaseUrl,
   jwtSecret,
   port,
   supabase,
+  gemini,
+  illustration,
+  openrouter,
+  cloudinary,
   projectRef,
   getDbPassword,
   parseDatabaseUrl,

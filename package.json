@@ -7,11 +7,18 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js"
   },
-  "keywords": ["express", "supabase", "postgresql", "api", "vocabulary"],
+  "keywords": [
+    "express",
+    "supabase",
+    "postgresql",
+    "api",
+    "vocabulary"
+  ],
   "author": "",
   "license": "MIT",
   "dependencies": {
     "bcrypt": "^5.1.1",
+    "cloudinary": "^2.11.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",

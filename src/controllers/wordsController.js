@@ -86,6 +86,15 @@ const getRandomWord = asyncHandler(async (req, res) => {
   });
 });
 
+const getWordById = asyncHandler(async (req, res) => {
+  const word = await wordsService.getWordById(req.user.id, req.params.id);
+
+  res.json({
+    success: true,
+    data: word,
+  });
+});
+
 const lookupWord = asyncHandler(async (req, res) => {
   const { word, term, query: queryTerm, english_word, spanish_word } = req.body || {};
   const result = await wordsService.lookupAndSaveWord(
@@ -101,6 +110,14 @@ const lookupWord = asyncHandler(async (req, res) => {
     });
   }
 
+  if (result.created) {
+    return res.status(201).json({
+      success: true,
+      message: 'Palabra no encontrada: creada con Task 2 (Gemini) y añadida a tu lista de aprendizaje',
+      data: result,
+    });
+  }
+
   res.status(result.added ? 201 : 200).json({
     success: true,
     message: result.added
@@ -110,10 +127,22 @@ const lookupWord = asyncHandler(async (req, res) => {
   });
 });
 
+const searchWords = asyncHandler(async (req, res) => {
+  const { q, limit } = req.query || {};
+  const data = await wordsService.searchWords(req.user.id, q ?? '', { limit });
+
+  res.json({
+    success: true,
+    data,
+  });
+});
+
 module.exports = {
   getWords,
   createWord,
   updateWord,
   getRandomWord,
+  getWordById,
   lookupWord,
+  searchWords,
 };
