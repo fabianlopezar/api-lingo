@@ -111,12 +111,8 @@ function resolveDatabaseUrl() {
 
 function resolveJwtSecret() {
   if (process.env.JWT_SECRET) return process.env.JWT_SECRET;
-
-  if (process.env.NODE_ENV !== 'production') {
-    console.warn('[WARN] JWT_SECRET no definido. Usando secreto de desarrollo.');
-    return 'colibri-dev-jwt-secret-cambiar-en-produccion';
-  }
-
+  // Sin fallback: fallar explícito en boot (ver src/index.js).
+  // Antes había un secreto hardcodeado de dev que permitía forjar tokens.
   return null;
 }
 
@@ -137,7 +133,14 @@ function parseDatabaseUrl(connectionString) {
 
 const databaseUrl = resolveDatabaseUrl();
 const jwtSecret = resolveJwtSecret();
+// 7d era excesivo: default 24h, configurable por env.
+const jwtExpiresIn = process.env.JWT_EXPIRES_IN || '24h';
 const port = parseInt(process.env.PORT, 10) || 3000;
+// Lista blanca CORS: "https://app.com,https://staging.app.com" o "*" solo en dev explícito.
+const corsOrigins = (process.env.CORS_ORIGIN || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 const projectRef = getProjectRefFromSupabaseUrl(process.env.NEXT_PUBLIC_SUPABASE_URL);
 
 const supabase = {
@@ -175,6 +178,8 @@ const cloudinary = {
 module.exports = {
   databaseUrl,
   jwtSecret,
+  jwtExpiresIn,
+  corsOrigins,
   port,
   supabase,
   gemini,

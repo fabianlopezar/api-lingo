@@ -1,13 +1,13 @@
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const { jwtSecret } = require('../config/env');
+const { jwtSecret, jwtExpiresIn } = require('../config/env');
 const { query } = require('../config/db');
 const AppError = require('../utils/AppError');
 const { formatUser } = require('../utils/mappers');
 const { validateEmail, validatePassword } = require('../utils/validators');
 
 const SALT_ROUNDS = 10;
-const JWT_EXPIRES_IN = '7d';
+const JWT_EXPIRES_IN = jwtExpiresIn || '24h';
 const DEMO_EMAIL = 'demo@colibri.local';
 
 function signToken(user) {

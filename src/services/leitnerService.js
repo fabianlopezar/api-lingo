@@ -208,15 +208,15 @@ async function getReviewStats(userId) {
 
   const result = await query(
     `SELECT
-       COUNT(*)::int AS total,
+       COUNT(*) FILTER (WHERE status = 'learning')::int AS total,
        COUNT(*) FILTER (WHERE next_review_at <= NOW() AND status = 'learning')::int AS due,
-       COUNT(*) FILTER (WHERE current_box = 1)::int AS box1,
-       COUNT(*) FILTER (WHERE current_box = 2)::int AS box2,
-       COUNT(*) FILTER (WHERE current_box = 3)::int AS box3,
-       COUNT(*) FILTER (WHERE current_box = 4)::int AS box4,
-       COUNT(*) FILTER (WHERE current_box = 5)::int AS box5
+       COUNT(*) FILTER (WHERE current_box = 1 AND status = 'learning')::int AS box1,
+       COUNT(*) FILTER (WHERE current_box = 2 AND status = 'learning')::int AS box2,
+       COUNT(*) FILTER (WHERE current_box = 3 AND status = 'learning')::int AS box3,
+       COUNT(*) FILTER (WHERE current_box = 4 AND status = 'learning')::int AS box4,
+       COUNT(*) FILTER (WHERE current_box = 5 AND status = 'learning')::int AS box5
      FROM user_words
-     WHERE user_id = $1`,
+     WHERE user_id = $1 AND status = 'learning'`,
     [validUserId]
   );
 

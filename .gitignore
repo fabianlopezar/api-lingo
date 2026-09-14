@@ -1,14 +1,16 @@
-<<<<<<< HEAD
+# Deps
 node_modules/
+# Env (nunca commitear secretos)
 .env
+.env.*
+!.env.example
+# OS / Editores
 .DS_Store
-*.log
-npm-debug.log*
 .vscode/
 .idea/
-coverage/
+# Build / coverage
 dist/
-=======
+coverage/
 # Logs
 logs
 *.log
@@ -152,4 +154,3 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
->>>>>>> 3d0b4731364ce7c8d7c8d29f9edb789891197597

@@ -23,6 +23,12 @@ function formatWord(row) {
     };
   }
 
+  // Estado del mazo (learning | learned). Necesario para que el
+  // frontend distinga archivadas de repasables.
+  if (row.status !== undefined) {
+    word.status = row.status;
+  }
+
   // Progreso Leitner (solo presente cuando el SELECT incluye user_words).
   if (row.current_box !== undefined && row.current_box !== null) {
     word.currentBox = row.current_box;

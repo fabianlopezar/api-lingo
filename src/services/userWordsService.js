@@ -2,6 +2,7 @@ const { query } = require('../config/db');
 const AppError = require('../utils/AppError');
 const { formatWord, attachIllustrations, attachLinguisticDetails } = require('../utils/mappers');
 const { validateUuid } = require('../utils/validators');
+const { leitnerReady } = require('../utils/leitnerSupport');
 
 async function upsertTodayStats(userId) {
   const existing = await query(
@@ -40,13 +41,28 @@ async function markAsLearned(userId, wordId) {
     throw new AppError('Esta palabra ya está marcada como aprendida', 409);
   }
 
-  const updated = await query(
-    `UPDATE user_words
-     SET status = 'learned', learned_at = NOW(), times_correct = times_correct + 1
-     WHERE id = $1
-     RETURNING id, user_id, word_id, status, learned_at, times_seen, times_correct`,
-    [existing.rows[0].id]
-  );
+  // Aprendida = dominada: además de archivar (status), se lleva a
+  // Caja 5 con repaso a 30 días para que Cajas la muestre como dominada.
+  const updated = await (async () => {
+    if (await leitnerReady()) {
+      return query(
+        `UPDATE user_words
+         SET status = 'learned', learned_at = NOW(), times_correct = times_correct + 1,
+             current_box = 5, last_reviewed_at = NOW(), next_review_at = NOW() + INTERVAL '30 days'
+         WHERE id = $1
+         RETURNING id, user_id, word_id, status, learned_at, times_seen, times_correct,
+                   current_box, last_reviewed_at, next_review_at`,
+        [existing.rows[0].id]
+      );
+    }
+    return query(
+      `UPDATE user_words
+       SET status = 'learned', learned_at = NOW(), times_correct = times_correct + 1
+       WHERE id = $1
+       RETURNING id, user_id, word_id, status, learned_at, times_seen, times_correct`,
+      [existing.rows[0].id]
+    );
+  })();
 
   await upsertTodayStats(userId);
 

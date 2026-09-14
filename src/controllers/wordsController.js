@@ -78,7 +78,9 @@ const updateWord = asyncHandler(async (req, res) => {
 });
 
 const getRandomWord = asyncHandler(async (req, res) => {
-  const word = await wordsService.getRandomWord(req.user.id);
+  // `exclude`: ids (coma-separados) vistos recientemente en la sesión.
+  const { exclude } = req.query || {};
+  const word = await wordsService.getRandomWord(req.user.id, { excludeIds: exclude });
 
   res.json({
     success: true,

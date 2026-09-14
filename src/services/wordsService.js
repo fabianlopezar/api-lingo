@@ -240,25 +240,46 @@ async function updateWord(
   return formatted;
 }
 
-async function getRandomWord(userId) {
+async function getRandomWord(userId, { excludeIds = [] } = {}) {
   const validUserId = validateUuid(userId, 'user id');
+  // Solo UUIDs válidos: evita inyección y ruido en el historial del cliente.
+  const excluded = [...new Set(
+    (Array.isArray(excludeIds) ? excludeIds : String(excludeIds || '').split(','))
+      .map((id) => String(id || '').trim())
+      .filter((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id))
+  )].slice(0, 50);
 
   // Leitner: las vencidas (next_review_at <= NOW()) salen primero,
-  // sorteadas al azar entre sí; si no hay vencidas, sorteo normal
-  // entre el resto. Sin la migración 004 se degrada al azar puro.
-  const orderBy = (await leitnerReady())
-    ? 'ORDER BY (uw.next_review_at <= NOW()) DESC, RANDOM()'
+  // ordenadas por urgencia: caja más baja primero (caja 1 = más urgente),
+  // luego la más vencida. RANDOM() solo como desempate final.
+  // Sin la migración 004 se degrada al azar puro.
+  const ready = await leitnerReady();
+  const orderBy = ready
+    ? 'ORDER BY (uw.next_review_at <= NOW()) DESC, COALESCE(uw.current_box, 1) ASC, uw.next_review_at ASC, RANDOM()'
     : 'ORDER BY RANDOM()';
 
-  const result = await query(
-    `SELECT ${await wordSelect()}
-     ${USER_WORDS_JOIN}
-     WHERE uw.user_id = $1
-       AND uw.status = 'learning'
-     ${orderBy}
-     LIMIT 1`,
-    [validUserId]
-  );
+  const baseWhere = 'WHERE uw.user_id = $1 AND uw.status = $2';
+  const notRecent = excluded.length > 0 ? 'AND NOT (w.id = ANY($3::uuid[]))' : '';
+
+  const run = async (withExclusions) =>
+    query(
+      `SELECT ${await wordSelect()}
+       ${USER_WORDS_JOIN}
+       ${baseWhere}
+       ${withExclusions ? notRecent : ''}
+       ${orderBy}
+       LIMIT 1`,
+      withExclusions && excluded.length > 0
+        ? [validUserId, 'learning', excluded]
+        : [validUserId, 'learning']
+    );
+
+  let result = await run(true);
+  // Mazo pequeño: si todo está en el historial reciente, se reintenta
+  // sin exclusiones antes de declarar el mazo agotado.
+  if (result.rows.length === 0 && excluded.length > 0) {
+    result = await run(false);
+  }
 
   if (result.rows.length === 0) {
     throw new AppError('No hay palabras nuevas disponibles. ¡Has aprendido todas!', 404);
