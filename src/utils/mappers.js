@@ -60,11 +60,21 @@ function formatCategory(row) {
 }
 
 function formatUser(user) {
+  if (!user) return null;
+  const birthDate =
+    user.birth_date instanceof Date
+      ? user.birth_date.toISOString().slice(0, 10)
+      : (user.birth_date ?? user.birthDate ?? null);
   return {
     id: user.id,
     email: user.email,
-    isDemo: user.is_demo,
-    createdAt: user.created_at,
+    isDemo: user.is_demo ?? user.isDemo,
+    birthDate,
+    birth_date: birthDate,
+    sex: user.sex ?? null,
+    nationality: user.nationality ?? null,
+    createdAt: user.created_at ?? user.createdAt,
+    created_at: user.created_at ?? user.createdAt,
   };
 }
 

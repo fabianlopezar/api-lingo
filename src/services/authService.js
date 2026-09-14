@@ -4,7 +4,13 @@ const { jwtSecret, jwtExpiresIn } = require('../config/env');
 const { query } = require('../config/db');
 const AppError = require('../utils/AppError');
 const { formatUser } = require('../utils/mappers');
-const { validateEmail, validatePassword } = require('../utils/validators');
+const {
+  validateEmail,
+  validatePassword,
+  validateBirthDate,
+  validateSex,
+  validateNationality,
+} = require('../utils/validators');
 
 const SALT_ROUNDS = 10;
 const JWT_EXPIRES_IN = jwtExpiresIn || '24h';
@@ -22,9 +28,15 @@ function signToken(user) {
   );
 }
 
-async function register({ email, password }) {
+async function register({ email, password, birthDate, birth_date, sex, nationality }) {
   const validEmail = validateEmail(email);
   const validPassword = validatePassword(password);
+  // Acepta snake_case y camelCase desde el frontend. Opcionales en API
+  // (NULLables en BD) para no romper clientes antiguos; el formulario
+  // de registro los pide como obligatorios.
+  const validBirthDate = validateBirthDate(birthDate ?? birth_date);
+  const validSex = validateSex(sex);
+  const validNationality = validateNationality(nationality);
 
   const existing = await query('SELECT id FROM users WHERE email = $1', [validEmail]);
   if (existing.rows.length > 0) {
@@ -34,10 +46,10 @@ async function register({ email, password }) {
   const passwordHash = await bcrypt.hash(validPassword, SALT_ROUNDS);
 
   const result = await query(
-    `INSERT INTO users (email, password, is_demo)
-     VALUES ($1, $2, false)
-     RETURNING id, email, is_demo, created_at`,
-    [validEmail, passwordHash]
+    `INSERT INTO users (email, password, is_demo, birth_date, sex, nationality)
+     VALUES ($1, $2, false, $3, $4, $5)
+     RETURNING id, email, is_demo, birth_date, sex, nationality, created_at`,
+    [validEmail, passwordHash, validBirthDate, validSex, validNationality]
   );
 
   const user = result.rows[0];
@@ -54,7 +66,7 @@ async function login({ email, password }) {
   }
 
   const result = await query(
-    `SELECT id, email, password, is_demo, created_at
+    `SELECT id, email, password, is_demo, birth_date, sex, nationality, created_at
      FROM users WHERE email = $1`,
     [validEmail]
   );
@@ -77,7 +89,7 @@ async function login({ email, password }) {
 
 async function demoLogin() {
   let result = await query(
-    `SELECT id, email, is_demo, created_at FROM users WHERE email = $1`,
+    `SELECT id, email, is_demo, birth_date, sex, nationality, created_at FROM users WHERE email = $1`,
     [DEMO_EMAIL]
   );
 
@@ -90,7 +102,7 @@ async function demoLogin() {
     result = await query(
       `INSERT INTO users (email, password, is_demo)
        VALUES ($1, $2, true)
-       RETURNING id, email, is_demo, created_at`,
+       RETURNING id, email, is_demo, birth_date, sex, nationality, created_at`,
       [DEMO_EMAIL, passwordHash]
     );
 
