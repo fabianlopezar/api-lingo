@@ -11,6 +11,7 @@ router.get('/random', authMiddleware, wordsController.getRandomWord);
 router.get('/search', authMiddleware, wordsController.searchWords);
 router.get('/:id', authMiddleware, wordsController.getWordById);
 router.post('/lookup', authMiddleware, wordsController.lookupWord);
+router.post('/:id/enrich', authMiddleware, wordsController.enrichWord);
 router.post('/', authMiddleware, wordsController.createWord);
 router.patch('/:id', authMiddleware, wordsController.updateWord);
 

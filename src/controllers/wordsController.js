@@ -139,6 +139,24 @@ const searchWords = asyncHandler(async (req, res) => {
   });
 });
 
+const enrichWord = asyncHandler(async (req, res) => {
+  const { skipIllustration } = req.query || {};
+  await wordsService.assertUserOwnsWord(req.user.id, req.params.id);
+  const { ensureWordDetails } = require('../services/unknownWordService');
+  const result = await ensureWordDetails(req.params.id, {
+    skipIllustration: skipIllustration === 'true' || skipIllustration === '1',
+  });
+  const word = await wordsService.getWordById(req.user.id, req.params.id);
+
+  res.json({
+    success: true,
+    message: result.enriched
+      ? 'Palabra enriquecida con sinónimos, antónimos y ejemplos'
+      : 'La palabra ya tenía características guardadas',
+    data: { enriched: result.enriched, word, details: result.details },
+  });
+});
+
 module.exports = {
   getWords,
   createWord,
@@ -147,4 +165,5 @@ module.exports = {
   getWordById,
   lookupWord,
   searchWords,
+  enrichWord,
 };

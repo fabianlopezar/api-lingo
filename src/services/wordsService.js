@@ -4,7 +4,7 @@ const { formatWord, attachIllustrations, attachLinguisticDetails } = require('..
 const { validateRequiredString, validateUuid } = require('../utils/validators');
 const { resolveCategoryId } = require('./categoriesService');
 const { leitnerReady } = require('../utils/leitnerSupport');
-const { handleUnknownWord } = require('./unknownWordService');
+const { handleUnknownWord, ensureWordDetails } = require('./unknownWordService');
 const { isConnectionError } = require('../utils/dbErrors');
 
 const USER_WORDS_JOIN = `
@@ -392,10 +392,41 @@ async function lookupAndSaveWord(userId, rawTerm, options = {}) {
     await attachIllustrations(word);
     await attachLinguisticDetails(word);
 
+    // Bajo demanda: palabra global sin características (stub de un
+    // sinónimo/antónimo o creada por POST / manual). Se enriquece con
+    // Gemini best-effort sin romper el lookup si la IA falla.
+    const needsEnrichment =
+      (word.synonyms?.length ?? 0) === 0 &&
+      (word.antonyms?.length ?? 0) === 0 &&
+      (word.grammar_family?.length ?? 0) === 0 &&
+      (word.examples?.length ?? 0) === 0;
+    let enriched = false;
+    if (needsEnrichment) {
+      try {
+        const result = await ensureWordDetails(row.id);
+        enriched = result.enriched;
+        if (enriched) {
+          await attachIllustrations(word);
+          await attachLinguisticDetails(word);
+          console.log('[lookupWord] Stub enriquecido bajo demanda:', {
+            userId: validUserId,
+            wordId: row.id,
+          });
+        }
+      } catch (error) {
+        console.warn('[lookupWord] Enriquecimiento bajo demanda omitido:', {
+          userId: validUserId,
+          wordId: row.id,
+          message: error?.message,
+        });
+      }
+    }
+
     return {
       found: true,
       added,
       alreadyInList: !added,
+      enriched,
       wordId: row.id,
       word,
     };

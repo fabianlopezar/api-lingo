@@ -130,6 +130,205 @@ async function loadDetails(queryFn, wordId) {
   };
 }
 
+/** Tiene la palabra ya características lingüísticas guardadas. */
+function hasLinguisticDetails(details) {
+  if (!details) return false;
+  return Boolean(
+    details.grammar_family ||
+      (Array.isArray(details.synonyms) && details.synonyms.length > 0) ||
+      (Array.isArray(details.collocations) && details.collocations.length > 0) ||
+      details.example
+  );
+}
+
+/**
+ * Persiste los detalles de Gemini para una palabra ya existente.
+ * `q` es `client.query` bindeado dentro de una transacción.
+ * Reutiliza stubs de sinónimos/antónimos (solo con traducción) y
+ * devuelve el objeto `details` listo para la respuesta.
+ */
+async function persistWordDetails(q, wordId, data, stubTranslations, illustrationUrl) {
+  const familyRes = await q(
+    `INSERT INTO grammar_family (word_id, nombre_familia)
+     VALUES ($1, $2)
+     RETURNING id, nombre_familia`,
+    [wordId, data.grammar_family]
+  );
+  const categoryRes = await q(
+    `INSERT INTO grammar_category (grammar_family_id, nombre_categoria)
+     VALUES ($1, $2)
+     RETURNING id, nombre_categoria`,
+    [familyRes.rows[0].id, data.grammar_category]
+  );
+
+  const synonyms = normalizeTerms(data.synonyms, data.word);
+  const antonyms = normalizeTerms(data.antonyms, data.word);
+
+  const linkedSynonyms = [];
+  for (const syn of synonyms) {
+    const translation = stubTranslations[syn];
+    if (!translation) {
+      console.log('[Task2] Sinónimo sin traducción, se omite:', { wordId, syn });
+      continue;
+    }
+    const stub = await resolveOrCreateWord(q, syn, translation);
+    if (stub.row.id === wordId) continue;
+    await q(
+      `INSERT INTO synonyms (word_id, synonym_word_id)
+       VALUES ($1, $2)
+       ON CONFLICT DO NOTHING`,
+      [wordId, stub.row.id]
+    );
+    linkedSynonyms.push({ id: stub.row.id, word: stub.row.english_word });
+  }
+
+  const linkedAntonyms = [];
+  for (const ant of antonyms) {
+    const translation = stubTranslations[ant];
+    if (!translation) {
+      console.log('[Task2] Antónimo sin traducción, se omite:', { wordId, ant });
+      continue;
+    }
+    const stub = await resolveOrCreateWord(q, ant, translation);
+    if (stub.row.id === wordId) continue;
+    await q(
+      `INSERT INTO antonyms (word_id, antonym_word_id)
+       VALUES ($1, $2)
+       ON CONFLICT DO NOTHING`,
+      [wordId, stub.row.id]
+    );
+    linkedAntonyms.push({ id: stub.row.id, word: stub.row.english_word });
+  }
+
+  const collocations = normalizeTerms(data.collocations, data.word);
+  for (const col of collocations) {
+    await q('INSERT INTO collocations (word_id, collocation) VALUES ($1, $2)', [wordId, col]);
+  }
+
+  const exampleRes = await q(
+    'INSERT INTO example (word_id, example_text) VALUES ($1, $2) RETURNING id, example_text',
+    [wordId, data.example]
+  );
+  const exampleTransRes = await q(
+    'INSERT INTO example_translation (example_id, translation) VALUES ($1, $2) RETURNING translation',
+    [exampleRes.rows[0].id, data.example_translation]
+  );
+
+  let savedIllustrationUrl = null;
+  if (illustrationUrl) {
+    const urlRes = await q(
+      'INSERT INTO url_illustration (word_id, url) VALUES ($1, $2) RETURNING url',
+      [wordId, illustrationUrl]
+    );
+    savedIllustrationUrl = urlRes.rows[0].url;
+  }
+
+  return {
+    grammar_family: familyRes.rows[0].nombre_familia,
+    grammar_category: categoryRes.rows[0].nombre_categoria,
+    synonyms: linkedSynonyms,
+    antonyms: linkedAntonyms,
+    collocations,
+    example: exampleRes.rows[0].example_text,
+    example_translation: exampleTransRes.rows[0].translation,
+    illustrationUrl: savedIllustrationUrl,
+  };
+}
+
+/**
+ * Backfill / bajo demanda: si la palabra (`words.id`) no tiene
+ * características (familia, sinónimos, colocaciones o ejemplo),
+ * las genera con Gemini y las persiste. Idempotente: si ya tiene
+ * detalles, no llama a Gemini y devuelve `enriched: false`.
+ *
+ * Pensado para:
+ * - stubs de sinónimos/antónimos creados pelados por `resolveOrCreateWord`,
+ * - palabras creadas por `POST /api/words` (sin Task 2),
+ * - script `scripts/backfill-word-details.js`.
+ *
+ * @param {string} wordId UUID de `words`.
+ * @param {object} [options]
+ * @param {boolean} [options.skipIllustration=false] Omite Tarea 3 (útil en backfill masivo).
+ * @returns {Promise<{ enriched: boolean, word: object, details: object }>}
+ */
+async function ensureWordDetails(wordId, { skipIllustration = false } = {}) {
+  const validWordId = validateUuid(wordId, 'word id');
+
+  const current = await query(`SELECT ${WORD_COLUMNS} FROM words WHERE id = $1 LIMIT 1`, [
+    validWordId,
+  ]);
+  if (current.rows.length === 0) {
+    const AppErrorLocal = require('../utils/AppError');
+    throw new AppErrorLocal('La palabra no existe', 404);
+  }
+  const wordRow = current.rows[0];
+
+  const existing = await loadDetails(query, validWordId);
+  if (hasLinguisticDetails(existing)) {
+    return { enriched: false, word: wordRow, details: existing };
+  }
+
+  const data = await geminiService.getWordData(wordRow.english_word);
+
+  const synonyms = normalizeTerms(data.synonyms, data.word);
+  const antonyms = normalizeTerms(data.antonyms, data.word);
+  const stubTerms = [...new Set([...synonyms, ...antonyms])];
+  const stubTranslations =
+    stubTerms.length > 0 ? await geminiService.translateWords(stubTerms) : {};
+
+  let illustrationUrl = null;
+  if (!skipIllustration) {
+    if (cloudinaryService.isCloudinaryConfigured()) {
+      try {
+        const { buffer, provider } = await illustrationService.generateIllustration(
+          data.example,
+          { word: data.word, translation: data.translation }
+        );
+        illustrationUrl = await cloudinaryService.uploadIllustration(
+          buffer,
+          buildIllustrationPublicId(data.word)
+        );
+        console.log('[ensureWordDetails] Ilustración lista:', {
+          wordId: validWordId,
+          provider,
+        });
+      } catch (error) {
+        console.warn('[ensureWordDetails] Ilustración omitida (best-effort):', {
+          wordId: validWordId,
+          message: error?.message,
+        });
+      }
+    }
+  }
+
+  const pool = await getPool();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const q = client.query.bind(client);
+
+    // Re-chequeo dentro de la transacción (carrera con otro backfill).
+    const details = await loadDetails(q, validWordId);
+    if (hasLinguisticDetails(details)) {
+      await client.query('COMMIT');
+      return { enriched: false, word: wordRow, details };
+    }
+
+    const fresh = await persistWordDetails(q, validWordId, data, stubTranslations, illustrationUrl);
+    await client.query('COMMIT');
+    console.log('[ensureWordDetails] Palabra enriquecida:', {
+      wordId: validWordId,
+      english: wordRow.english_word,
+    });
+    return { enriched: true, word: wordRow, details: fresh };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 /** public_id único y seguro para Cloudinary a partir de la palabra. */
 function buildIllustrationPublicId(englishWord) {
   const slug = englishWord
@@ -192,14 +391,44 @@ async function handleUnknownWord(userId, term) {
       handleDbError(error, { op: 'task2.link', userId: validUserId, wordId: raced.id });
     }
     const added = link.rows.length > 0;
-    return {
-      found: true,
-      created: false,
-      added,
-      alreadyInList: !added,
-      wordId: raced.id,
-      word: formatWord(raced),
-    };
+
+    // Bajo demanda: si la palabra existente es un stub (sin familia,
+    // sinónimos, colocaciones ni ejemplo), se enriquece con Gemini.
+    // Best-effort: si Gemini falla, se devuelve la palabra enlazada
+    // sin romper el flujo.
+    try {
+      const { enriched, details } = await ensureWordDetails(raced.id);
+      if (enriched) {
+        console.log('[Task2] Stub enriquecido bajo demanda:', {
+          userId: validUserId,
+          wordId: raced.id,
+        });
+      }
+      return {
+        found: true,
+        created: false,
+        added,
+        alreadyInList: !added,
+        enriched,
+        wordId: raced.id,
+        word: formatWord(raced),
+        details,
+      };
+    } catch (error) {
+      console.warn('[Task2] Enriquecimiento bajo demanda omitido:', {
+        userId: validUserId,
+        wordId: raced.id,
+        message: error?.message,
+      });
+      return {
+        found: true,
+        created: false,
+        added,
+        alreadyInList: !added,
+        wordId: raced.id,
+        word: formatWord(raced),
+      };
+    }
   }
 
   console.log('[Task2] Miss confirmado, consultando Gemini:', {
@@ -262,97 +491,9 @@ async function handleUnknownWord(userId, term) {
     );
 
     let details = await loadDetails(q, wordRow.id);
-    const hasDetails =
-      details.grammar_family ||
-      details.synonyms.length > 0 ||
-      details.collocations.length > 0 ||
-      details.example;
 
-    if (!hasDetails) {
-      const familyRes = await q(
-        `INSERT INTO grammar_family (word_id, nombre_familia)
-         VALUES ($1, $2)
-         RETURNING id, nombre_familia`,
-        [wordRow.id, data.grammar_family]
-      );
-      const categoryRes = await q(
-        `INSERT INTO grammar_category (grammar_family_id, nombre_categoria)
-         VALUES ($1, $2)
-         RETURNING id, nombre_categoria`,
-        [familyRes.rows[0].id, data.grammar_category]
-      );
-
-      const linkedSynonyms = [];
-      for (const syn of synonyms) {
-        const translation = stubTranslations[syn];
-        if (!translation) {
-          console.log('[Task2] Sinónimo sin traducción, se omite:', { wordId: wordRow.id, syn });
-          continue;
-        }
-        const stub = await resolveOrCreateWord(q, syn, translation);
-        if (stub.row.id === wordRow.id) continue;
-        await q(
-          `INSERT INTO synonyms (word_id, synonym_word_id)
-           VALUES ($1, $2)
-           ON CONFLICT DO NOTHING`,
-          [wordRow.id, stub.row.id]
-        );
-        linkedSynonyms.push({ id: stub.row.id, word: stub.row.english_word });
-      }
-
-      const linkedAntonyms = [];
-      for (const ant of antonyms) {
-        const translation = stubTranslations[ant];
-        if (!translation) {
-          console.log('[Task2] Antónimo sin traducción, se omite:', { wordId: wordRow.id, ant });
-          continue;
-        }
-        const stub = await resolveOrCreateWord(q, ant, translation);
-        if (stub.row.id === wordRow.id) continue;
-        await q(
-          `INSERT INTO antonyms (word_id, antonym_word_id)
-           VALUES ($1, $2)
-           ON CONFLICT DO NOTHING`,
-          [wordRow.id, stub.row.id]
-        );
-        linkedAntonyms.push({ id: stub.row.id, word: stub.row.english_word });
-      }
-
-      for (const col of collocations) {
-        await q('INSERT INTO collocations (word_id, collocation) VALUES ($1, $2)', [
-          wordRow.id,
-          col,
-        ]);
-      }
-
-      const exampleRes = await q(
-        'INSERT INTO example (word_id, example_text) VALUES ($1, $2) RETURNING id, example_text',
-        [wordRow.id, data.example]
-      );
-      const exampleTransRes = await q(
-        'INSERT INTO example_translation (example_id, translation) VALUES ($1, $2) RETURNING translation',
-        [exampleRes.rows[0].id, data.example_translation]
-      );
-
-      let savedIllustrationUrl = null;
-      if (illustrationUrl) {
-        const urlRes = await q(
-          'INSERT INTO url_illustration (word_id, url) VALUES ($1, $2) RETURNING url',
-          [wordRow.id, illustrationUrl]
-        );
-        savedIllustrationUrl = urlRes.rows[0].url;
-      }
-
-      details = {
-        grammar_family: familyRes.rows[0].nombre_familia,
-        grammar_category: categoryRes.rows[0].nombre_categoria,
-        synonyms: linkedSynonyms,
-        antonyms: linkedAntonyms,
-        collocations,
-        example: exampleRes.rows[0].example_text,
-        example_translation: exampleTransRes.rows[0].translation,
-        illustrationUrl: savedIllustrationUrl,
-      };
+    if (!hasLinguisticDetails(details)) {
+      details = await persistWordDetails(q, wordRow.id, data, stubTranslations, illustrationUrl);
     }
 
     const link = await q(
@@ -393,4 +534,7 @@ async function handleUnknownWord(userId, term) {
 
 module.exports = {
   handleUnknownWord,
+  ensureWordDetails,
+  loadDetails,
+  hasLinguisticDetails,
 };
