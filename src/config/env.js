@@ -175,6 +175,15 @@ const cloudinary = {
   apiSecret: process.env.CLOUDINARY_API_SECRET || null,
 };
 
+const google = {
+  // Client ID de Google Cloud Console (OAuth 2.0 → Web application).
+  // Se acepta lista separada por comas para soportar dev + prod.
+  clientIds: (process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_IDS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
+};
+
 module.exports = {
   databaseUrl,
   jwtSecret,
@@ -186,6 +195,7 @@ module.exports = {
   illustration,
   openrouter,
   cloudinary,
+  google,
   projectRef,
   getDbPassword,
   parseDatabaseUrl,

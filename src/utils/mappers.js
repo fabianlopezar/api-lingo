@@ -68,11 +68,15 @@ function formatUser(user) {
   return {
     id: user.id,
     email: user.email,
-    isDemo: user.is_demo ?? user.isDemo,
+    isDemo: user.is_demo ?? user.isDemo ?? false,
     birthDate,
     birth_date: birthDate,
     sex: user.sex ?? null,
     nationality: user.nationality ?? null,
+    avatarUrl: user.avatar_url ?? user.avatarUrl ?? null,
+    avatar_url: user.avatar_url ?? user.avatarUrl ?? null,
+    authProvider: user.auth_provider ?? user.authProvider ?? 'email',
+    auth_provider: user.auth_provider ?? user.authProvider ?? 'email',
     createdAt: user.created_at ?? user.createdAt,
     created_at: user.created_at ?? user.createdAt,
   };
