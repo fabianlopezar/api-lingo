@@ -222,7 +222,23 @@ async function googleLogin({ idToken }) {
 }
 
 async function getById(userId) {
-  const result = await query(`SELECT ${USER_SELECT} FROM users WHERE id = $1`, [userId]);
+  // Solo se consulta el id que viene del JWT (ver middleware/auth.js + controller me).
+  // Nunca se acepta un id por query/body params: el usuario solo ve su propia fila.
+  // El SELECT excluye `password` a propósito. Se tolera BD sin migración 006.
+  let result;
+  try {
+    result = await query(`SELECT ${USER_SELECT} FROM users WHERE id = $1`, [userId]);
+  } catch (err) {
+    if (err && err.code === '42703') {
+      result = await query(
+        `SELECT id, email, is_demo, birth_date, sex, nationality, created_at
+         FROM users WHERE id = $1`,
+        [userId]
+      );
+    } else {
+      throw err;
+    }
+  }
   if (result.rows.length === 0) {
     throw new AppError('Usuario no encontrado', 404);
   }
