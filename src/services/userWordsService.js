@@ -18,8 +18,8 @@ async function upsertTodayStats(userId) {
     );
   } else {
     await query(
-      `INSERT INTO stats (user_id, date, words_learned, study_time)
-       VALUES ($1, CURRENT_DATE, 1, 0)`,
+      `INSERT INTO stats (user_id, date, words_learned)
+       VALUES ($1, CURRENT_DATE, 1)`,
       [userId]
     );
   }
@@ -65,6 +65,14 @@ async function markAsLearned(userId, wordId) {
   })();
 
   await upsertTodayStats(userId);
+
+  // El día cuenta para la racha (best-effort: nunca rompe el marcado).
+  try {
+    const { registerStudyActivity } = require('./statsService');
+    await registerStudyActivity(userId);
+  } catch (error) {
+    console.warn('[streak] Actividad de aprendida no registrada:', error?.message);
+  }
 
   return updated.rows[0];
 }

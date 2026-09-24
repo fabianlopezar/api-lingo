@@ -124,6 +124,14 @@ async function evaluateReviewResponse(userId, wordId, isCorrect) {
     [nextBox, nextReviewAt.toISOString(), isCorrect ? 1 : 0, row.id]
   );
 
+  // El día cuenta para la racha (best-effort: nunca rompe el repaso).
+  try {
+    const { registerStudyActivity } = require('./statsService');
+    await registerStudyActivity(validUserId);
+  } catch (error) {
+    console.warn('[streak] Actividad de repaso no registrada:', error?.message);
+  }
+
   const r = updated.rows[0];
   return {
     id: r.id,

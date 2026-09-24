@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS users (
   birth_date DATE,
   sex VARCHAR(20),
   nationality VARCHAR(100),
+  current_streak INTEGER NOT NULL DEFAULT 0,
+  last_active_date DATE,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -68,13 +70,13 @@ CREATE INDEX IF NOT EXISTS idx_user_words_user_id ON user_words(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_words_word_id ON user_words(word_id);
 CREATE INDEX IF NOT EXISTS idx_user_words_due_review ON user_words(user_id, next_review_at);
 
--- STATS (una fila por usuario y día)
+-- STATS (una fila por usuario y día: aprendidas archivadas por día)
+-- La racha de días consecutivos vive en users.current_streak.
 CREATE TABLE IF NOT EXISTS stats (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   date DATE NOT NULL,
   words_learned INTEGER,
-  study_time INTEGER,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(user_id, date)
 );
